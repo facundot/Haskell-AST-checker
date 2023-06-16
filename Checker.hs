@@ -13,10 +13,8 @@ module Checker where
 import Syntax
 -- se pueden agregar mas importaciones 
 -- en caso de ser necesario
-
 import Data.List
 import Data.Maybe
-import Data.List (nub, (\\))
 import qualified Data.Map as Map
 import Data.Monoid (Monoid(..))
 
@@ -30,10 +28,6 @@ data Error = Duplicated      Name
            | ArgNumApp       Name Int Int
            | Expected        Type Type
 
-instance Eq Checked where
-  Ok == Ok = True
-  Wrong _ == Wrong _ = True
-  _ == _ = False
 
 instance Semigroup Checked where
   Ok <> Ok = Ok
@@ -44,6 +38,11 @@ instance Semigroup Checked where
 instance Monoid Checked where
   mempty = Ok
             
+instance Eq Checked where
+  Ok == Ok = True
+  Wrong _ == Wrong _ = True
+  _ == _ = False
+
 instance Show Error where
  show (Duplicated      n)  = "Duplicated declaration: " ++ n
  show (Undefined       n)  = "Undefined: " ++ n
@@ -62,7 +61,7 @@ checkProgram program =
     result1 = checkUniqueNames program
     result2 = checkNumParams program
     result3 = checkProgramUndefinedParams program
-    result4 = Ok
+    result4 = checkTypes program
   in
     if result1 /= Ok
       then result1
@@ -181,95 +180,192 @@ checkUndefinedFunction name definedNames
 ----------------------------------------------------------------------------
 -- Type check
 ----------------------------------------------------------------------------  
-{-checkTypes :: Program -> Checked
-checkTypes (Program defs expr) = checkExpr expr env
-  where
-    env = buildEnv defs
+checkTypes :: Program -> Checked
+checkTypes (Program defs expr) =
+  let
+    definedFunctionsEnv = collectFunctionsDefsReturnType defs 
+    result1 = checkDefs defs definedFunctionsEnv 
+    result2 = checkExpr expr definedFunctionsEnv []
+  in  
+    result1 <> result2 
 
--- Construye el ambiente (entorno) a partir de las definiciones de funciones
-buildEnv :: Defs -> Env
-buildEnv = foldr extendEnv []
 
--- Extiende el ambiente (entorno) con una nueva variable y su tipo
-extendEnv :: FunDef -> Env -> Env
-extendEnv (FunDef (name, Sig argTypes returnType) _ _) env = (name, returnType) : env
+emptyEnv::Env
+emptyEnv = []
 
--- Comprueba el tipo de una expresión en un ambiente dado
-checkExpr :: Expr -> Env -> Checked
-checkExpr (Var name) env =
+type FunctionsEnv = [(Name,Sig)]
+
+collectFunctionsDefsReturnType :: Defs -> FunctionsEnv        
+collectFunctionsDefsReturnType defs = concatMap collectFunDefReturn defs
+
+collectFunDefReturn :: FunDef -> FunctionsEnv                  
+collectFunDefReturn (FunDef (name, sig) params _) = [(name,sig)]
+
+
+getReturnTypes :: Sig -> Type
+getReturnTypes (Sig _ returnType) = returnType
+
+getArgumentsTypes ::Sig -> [Type]
+getArgumentsTypes (Sig types _) = types
+
+
+checkDefs :: Defs -> FunctionsEnv -> Checked
+checkDefs defs functionsEnv = foldMap (\def -> checkFunDef def functionsEnv (buildLocalEnv def)) defs
+
+buildLocalEnv::FunDef -> Env
+buildLocalEnv (FunDef (name, sig) params expr) = 
+  let
+    domian = getArgumentsTypes sig
+    localEnv = zip params domian
+  in
+    localEnv
+
+checkFunDef :: FunDef -> FunctionsEnv -> Env -> Checked
+checkFunDef (FunDef (name, sig) params expr) functionsEnv localEnv = checkExpr expr functionsEnv localEnv
+
+
+
+checkExpr :: Expr -> FunctionsEnv -> Env -> Checked
+checkExpr (Var name) _ env =
   case lookup name env of
     Just _ -> Ok
     Nothing -> Wrong [Undefined name]
-checkExpr (IntLit _) _ = Ok
-checkExpr (BoolLit _) _ = Ok
-checkExpr (Infix op e1 e2) env =
-  case op of
-    Add -> checkBinaryOp e1 e2 TyInt
-    Sub -> checkBinaryOp e1 e2 TyInt
-    Mult -> checkBinaryOp e1 e2 TyInt
-    Div -> checkBinaryOp e1 e2 TyInt
-    Eq -> checkBinaryOp e1 e2 TyBool
-    NEq -> checkBinaryOp e1 e2 TyBool
-    GTh -> checkBinaryOp e1 e2 TyBool
-    LTh -> checkBinaryOp e1 e2 TyBool
-    GEq -> checkBinaryOp e1 e2 TyBool
-    LEq -> checkBinaryOp e1 e2 TyBool
-  where
-    checkBinaryOp e1 e2 expectedType =
-      let result1 = checkExpr e1 env
-          result2 = checkExpr e2 env
-       in result1 <> result2 <> checkTypeMatch e1 e2 expectedType
-checkExpr (If cond e1 e2) env =
-  let result1 = checkExpr cond env
-      result2 = checkExpr e1 env
-      result3 = checkExpr e2 env
-   in result1 <> result2 <> result3 <> checkTypeMatch e1 e2 (getType e1 env)
-checkExpr (Let (name, varType) e1 e2) env =
-  let result1 = checkExpr e1 env
-      result2 = checkExpr e2 ((name, varType) : env)
-   in result1 <> result2 <> checkTypeMatch e1 e2 varType
-checkExpr (App name args) env =
-  case lookup name env of
-    Just (Sig argTypes returnType) ->
-      let argResults = map (\arg -> checkExpr arg env) args
-          argMismatchErrors = zipWith3 checkArgNum name argTypes args argResults
-       in foldr (<>) (checkReturnType returnType (getType (last args) env)) argResults <> foldr (<>) mempty argMismatchErrors
+
+checkExpr (IntLit _) _ _ = Ok
+
+checkExpr (BoolLit _) _ _ = Ok
+
+checkExpr (Infix op e1 e2) functionsEnv env =
+  let
+    result1 = checkExpr e1 functionsEnv env
+    result2 = checkExpr e2 functionsEnv env
+    type1 = getTypeOfExpr e1 functionsEnv env
+    type2 = getTypeOfExpr e2 functionsEnv env
+  in
+    case (op, type1, type2) of
+      (Add, Right TyInt, Right TyInt) -> Ok <> result1 <> result2
+      (Add, Right TyBool, Right TyInt) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Add, Right TyInt, Right TyBool) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Add, Right TyBool, Right TyBool) -> Wrong [Expected TyInt TyBool] <> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Sub, Right TyInt, Right TyInt) -> Ok <> result1 <> result2
+      (Sub, Right TyBool, Right TyInt) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Sub, Right TyInt, Right TyBool) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Sub, Right TyBool, Right TyBool) -> Wrong [Expected TyInt TyBool] <> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Mult, Right TyInt, Right TyInt) -> Ok <> result1 <> result2
+      (Mult, Right TyBool, Right TyInt) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Mult, Right TyInt, Right TyBool) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Mult, Right TyBool, Right TyBool) -> Wrong [Expected TyInt TyBool] <> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Div, Right TyInt, Right TyInt) -> Ok <> result1 <> result2
+      (Div, Right TyBool, Right TyInt) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Div, Right TyInt, Right TyBool) -> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Div, Right TyBool, Right TyBool) -> Wrong [Expected TyInt TyBool] <> Wrong [Expected TyInt TyBool] <> result1 <> result2
+      (Eq, Right ty1, Right ty2) | ty1 == ty2 -> Ok <> result1 <> result2
+      (Eq, Right ty1, Right ty2)  -> Wrong [Expected ty1 ty2] <> result1 <> result2
+      (NEq, Right ty1, Right ty2) | ty1 == ty2 -> Ok <> result1 <> result2
+      (NEq, Right ty1, Right ty2)  -> Wrong [Expected ty1 ty2] <> result1 <> result2
+      (GTh, Right ty1, Right ty2) | ty1 == ty2 -> Ok <> result1 <> result2
+      (GTh, Right ty1, Right ty2)  -> Wrong [Expected ty1 ty2] <> result1 <> result2
+      (LTh, Right ty1, Right ty2) | ty1 == ty2 -> Ok <> result1 <> result2
+      (LTh, Right ty1, Right ty2)  -> Wrong [Expected ty1 ty2] <> result1 <> result2
+      (GEq, Right ty1, Right ty2) | ty1 == ty2 -> Ok <> result1 <> result2
+      (GEq, Right ty1, Right ty2)  -> Wrong [Expected ty1 ty2] <> result1 <> result2
+      (LEq, Right ty1, Right ty2) | ty1 == ty2 -> Ok <> result1 <> result2
+      (LEq, Right ty1, Right ty2)  -> Wrong [Expected ty1 ty2] <> result1 <> result2
+      
+
+checkExpr (If cond e1 e2) functionsEnv env =
+  let
+    result1 = checkExpr cond functionsEnv env
+    result2 = checkExpr e1 functionsEnv env
+    result3 = checkExpr e2 functionsEnv env
+    typeCond = getTypeOfExpr cond functionsEnv env
+    type1 = getTypeOfExpr e1 functionsEnv env
+    type2 = getTypeOfExpr e2 functionsEnv env
+  in
+    case (typeCond, type1, type2) of
+      (Right TyBool, Right type1, Right type2) | type1 == type2 -> Ok <> result1 <> result2 <> result3
+      (Right TyBool, Right type1, Right type2) -> Wrong [Expected  type1  type2] <> result1 <> result2 <> result3
+      (Right TyInt, Right type1, Right type2) | type1 == type2 -> Wrong [Expected TyBool TyInt] <> result1 <> result2 <> result3
+      (Right TyInt, Right type1, Right type2) -> Wrong [Expected TyBool TyInt] <> Wrong [Expected  type1  type2] <> result1 <> result2 <> result3
+      
+
+checkExpr (Let (name, ty) e1 e2) functionsEnv env =
+  let
+    extendedEnv = (name, ty) : env
+    result1 = checkExpr e1 functionsEnv env
+    result2 = checkExpr e2 functionsEnv extendedEnv
+    type1 = getTypeOfExpr e1 functionsEnv env
+    in
+    case type1 of
+      Right type1 | type1 == ty -> Ok <> result1 <> result2
+      Right type1 -> Wrong [Expected ty type1] <> result1 <> result2
+
+
+checkExpr (App name exprs) functionsEnv env =
+  case lookup name functionsEnv of
+    Just (Sig argTypes retType) ->
+      let
+        argResults = zipWith (\expr argType -> checkExpr expr functionsEnv env <> checkType expr argType functionsEnv env) exprs argTypes
+        expectedArgNum = length argTypes
+        actualArgNum = length exprs
+      in
+        if expectedArgNum == actualArgNum
+          then foldMap id argResults
+          else Wrong [ArgNumApp name expectedArgNum actualArgNum] <> foldMap id argResults
     Nothing -> Wrong [Undefined name]
 
--- Comprueba si dos expresiones tienen el mismo tipo
-checkTypeMatch :: Expr -> Expr -> Type -> Checked
-checkTypeMatch e1 e2 expectedType =
-  if getType e1 env == getType e2 env && getType e1 env == expectedType
-    then Ok
-    else Wrong [Expected (getType e1 env) expectedType]
-
--- Comprueba si el número de argumentos en la aplicación coincide con la definición de la función
-checkArgNum :: Name -> [Type] -> [Expr] -> Checked -> Checked
-checkArgNum name argTypes args argResults =
-  let expectedNum = length argTypes
-      actualNum = length args
-   in if expectedNum == actualNum
+checkType :: Expr -> Type -> FunctionsEnv -> Env -> Checked
+checkType expr expectedType functionsEnv env =
+  case getTypeOfExpr expr functionsEnv env of
+    Right actualType ->
+      if actualType == expectedType
         then Ok
-        else Wrong [ArgNumApp name expectedNum actualNum]
+        else Wrong [Expected expectedType actualType]
+    Left error -> Wrong [error]    
 
--- Obtiene el tipo de una expresión en un ambiente dado
-getType :: Expr -> Env -> Type
-getType (Var name) env = case lookup name env of
-  Just varType -> varType
-  Nothing -> error "Variable not found in environment"
-getType (IntLit _) _ = TyInt
-getType (BoolLit _) _ = TyBool
-getType (Infix _ e1 _) env = getType e1 env
-getType (If _ e1 _) env = getType e1 env
-getType (Let _ _ e2) env = getType e2 env
-getType (App _ _) env = case lookup name env of
-  Just (Sig _ returnType) -> returnType
-  Nothing -> error "Function not found in environment"
+getTypeOfExpr :: Expr -> FunctionsEnv -> Env -> Either Error Type
+getTypeOfExpr (Var name) _ env =
+  case lookup name env of
+    Just ty -> Right ty
+    Nothing -> Left (Undefined name)
 
--- Comprueba si el tipo de retorno de una expresión coincide con el tipo esperado
-checkReturnType :: Type -> Type -> Checked
-checkReturnType expectedType actualType =
-  if expectedType == actualType
-    then Ok
-    else Wrong [Expected actualType expectedType] -}
+getTypeOfExpr (IntLit _) _ _ = Right TyInt
 
+getTypeOfExpr (BoolLit _) _ _ = Right TyBool
+
+getTypeOfExpr (Infix op e1 e2) functionsEnv env =
+    case op of
+      Add -> Right TyInt
+      Sub -> Right TyInt
+      Mult -> Right TyInt
+      Div -> Right TyInt
+      Eq -> Right TyBool
+      NEq -> Right TyBool
+      GTh ->Right TyBool
+      LTh -> Right TyBool
+      GEq -> Right TyBool
+      LEq -> Right TyBool
+      
+
+getTypeOfExpr (If cond e1 e2) functionsEnv env =
+  let
+    type1 = getTypeOfExpr e1 functionsEnv env
+    type2 = getTypeOfExpr e2 functionsEnv env
+  in
+    case (type1, type2) of
+      (Right type1, Right type2) | type1 == type2 -> Right type1
+      (Right type1, Right type2) -> Right type1
+      
+      
+getTypeOfExpr (Let (var,ty) e1 e2) functionsEnv env =
+  let
+    type1 = getTypeOfExpr e2 functionsEnv ( (var,ty): env )
+    in
+    case type1 of
+      Right ty -> Right ty
+      
+
+getTypeOfExpr (App name exprs) functionsEnv env =
+  case lookup name functionsEnv of
+    Just (Sig _ retType) -> Right retType
+    Nothing -> Left (Undefined name)

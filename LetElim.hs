@@ -31,6 +31,11 @@ letElimExpr (Infix op e1 e2) = Infix op (letElimExpr e1) (letElimExpr e2)
 letElimExpr (If cond e1 e2) = If (letElimExpr cond) (letElimExpr e1) (letElimExpr e2)
 letElimExpr (Let (name, _) bindExpr bodyExpr) =
   case bindExpr of
+    Let (name', _) bindExpr' bodyExpr' ->
+      let simplifiedBindExpr = letElimExpr bindExpr 
+          updatedExpr = Let (name, TyInt) simplifiedBindExpr bodyExpr  
+      in letElimExpr updatedExpr  
+
     IntLit n -> let bodyExpr' = subst name bindExpr bodyExpr
                 in letElimExpr bodyExpr'
     BoolLit b -> let bodyExpr' = subst name bindExpr bodyExpr
@@ -60,39 +65,3 @@ subst name bindExpr (App name' args) =
 
 
 
-
-
-
-
-
-
-exampleProgram :: Program
-exampleProgram = Program [] expr
-
-expr :: Expr
-expr = Let ("x", TyInt) (IntLit 3) (Let ("x", TyInt) (Infix Add (IntLit 4) (Var "x")) (Infix Add (Var "x") (IntLit 2)))
-
-exampleProgram1 :: Program
-exampleProgram1 = Program [] expr1
-expr1 :: Expr
-expr1 = Let ("x", TyInt) (IntLit 3) (Let ("x", TyInt) (IntLit 4) (Infix Add (Var "x") (IntLit 2)))
-
-exampleProgram2 :: Program
-exampleProgram2 = Program [] expr2
-
-expr2 :: Expr
-expr2 = Let ("x", TyInt) (IntLit 3) (Infix Add (Var "x") (Infix Mult (IntLit 2) (Var "x")))
-
-
-
-main :: IO ()
-main = do
-  let optimizedProgram = letElimP exampleProgram
-  putStrLn $ "Original program:\n" ++ show exampleProgram
-  putStrLn $ "Optimized program:\n" ++ show optimizedProgram
-  let optimizedProgram1 = letElimP exampleProgram1
-  putStrLn $ "Original program:\n" ++ show exampleProgram1
-  putStrLn $ "Optimized program:\n" ++ show optimizedProgram1
-  let optimizedProgram2 = letElimP exampleProgram2
-  putStrLn $ "Original program:\n" ++ show exampleProgram2
-  putStrLn $ "Optimized program:\n" ++ show optimizedProgram2
