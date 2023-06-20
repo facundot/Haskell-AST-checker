@@ -135,14 +135,14 @@ countParamsSig (Sig params _) = length params
 
 checkProgramUndefinedParams :: Program -> Checked
 checkProgramUndefinedParams (Program defs expr) =
-  checkDefsUndefinedParams defs <> checkExprUndefinedParams expr (collectDefinedNames defs)
+  checkDefsUndefinedParams defs (collectDefinedNames defs)  <> checkExprUndefinedParams expr (collectDefinedNames defs)
 
-checkDefsUndefinedParams :: Defs -> Checked
-checkDefsUndefinedParams = foldMap checkFunDefUndefinedParams
+checkDefsUndefinedParams :: Defs -> [Name] -> Checked
+checkDefsUndefinedParams defs env = foldMap checkFunDefUndefinedParams defs env 
 
-checkFunDefUndefinedParams :: FunDef -> Checked
-checkFunDefUndefinedParams (FunDef (name, _) params expr) =
-  checkExprUndefinedParams expr (name:params)
+checkFunDefUndefinedParams :: FunDef -> [Name] -> Checked
+checkFunDefUndefinedParams (FunDef (name, _) params expr) env =
+  checkExprUndefinedParams expr (env ++ params)
 
 collectDefinedNames :: Defs -> [Name]
 collectDefinedNames = concatMap collectDefinedNamesFromDef
@@ -221,8 +221,19 @@ buildLocalEnv (FunDef (name, sig) params expr) =
     localEnv
 
 checkFunDef :: FunDef -> FunctionsEnv -> Env -> Checked
-checkFunDef (FunDef (name, sig) params expr) functionsEnv localEnv = checkExpr expr functionsEnv localEnv
+checkFunDef (FunDef (name, sig) params expr) functionsEnv localEnv = checkdefActualReturnType (getReturnTypes sig) expr functionsEnv localEnv <>  checkExpr expr functionsEnv localEnv
 
+checkdefActualReturnType ::Type -> Expr -> FunctionsEnv -> Env -> Checked
+checkdefActualReturnType ret expr functionsEnv localEnv = 
+  let
+    actualRetType = getTypeOfExpr expr functionsEnv localEnv
+    returnTypeCheck = case actualRetType of
+                        Right actualRetType -> actualRetType == ret
+                        Left _ -> False
+  in
+    case (actualRetType,returnTypeCheck) of
+      (Right ty,False) -> Wrong [Expected ret ty]
+      (Right ty,True) -> Ok 
 
 
 checkExpr :: Expr -> FunctionsEnv -> Env -> Checked
@@ -298,13 +309,13 @@ checkExpr (Let (name, ty) e1 e2) functionsEnv env =
     in
     case type1 of
       Right type1 | type1 == ty -> Ok <> result1 <> result2
-      Right type1 -> Wrong [Expected ty type1] <> result1 <> result2
+      Right type1 ->  Wrong [Expected ty type1]<>  result1 <> result2 
 
 
 checkExpr (App name exprs) functionsEnv env =
   case lookup name functionsEnv of
     Just (Sig argTypes retType) ->
-      let
+     let
         argResults = zipWith (\expr argType -> checkExpr expr functionsEnv env <> checkType expr argType functionsEnv env) exprs argTypes
         expectedArgNum = length argTypes
         actualArgNum = length exprs
@@ -350,11 +361,10 @@ getTypeOfExpr (Infix op e1 e2) functionsEnv env =
 getTypeOfExpr (If cond e1 e2) functionsEnv env =
   let
     type1 = getTypeOfExpr e1 functionsEnv env
-    type2 = getTypeOfExpr e2 functionsEnv env
   in
-    case (type1, type2) of
-      (Right type1, Right type2) | type1 == type2 -> Right type1
-      (Right type1, Right type2) -> Right type1
+    case type1 of
+      Right type1 -> Right type1
+      
       
       
 getTypeOfExpr (Let (var,ty) e1 e2) functionsEnv env =

@@ -29,18 +29,18 @@ letElimExpr expr@(IntLit _) = expr
 letElimExpr expr@(BoolLit _) = expr
 letElimExpr (Infix op e1 e2) = Infix op (letElimExpr e1) (letElimExpr e2)
 letElimExpr (If cond e1 e2) = If (letElimExpr cond) (letElimExpr e1) (letElimExpr e2)
-letElimExpr (Let (name, _) bindExpr bodyExpr) =
+letElimExpr (Let (name, ty) bindExpr bodyExpr) =
   case bindExpr of
-    Let (name', _) bindExpr' bodyExpr' ->
+    Let (name', ty) bindExpr' bodyExpr' ->
       let simplifiedBindExpr = letElimExpr bindExpr 
-          updatedExpr = Let (name, TyInt) simplifiedBindExpr bodyExpr  
+          updatedExpr = Let (name, ty) simplifiedBindExpr bodyExpr  
       in letElimExpr updatedExpr  
 
     IntLit n -> let bodyExpr' = subst name bindExpr bodyExpr
                 in letElimExpr bodyExpr'
     BoolLit b -> let bodyExpr' = subst name bindExpr bodyExpr
                  in letElimExpr bodyExpr'
-    _ -> Let (name, TyInt) (letElimExpr bindExpr) (letElimExpr bodyExpr)
+    _ -> Let (name, ty) (letElimExpr bindExpr) (letElimExpr bodyExpr)
 letElimExpr (App name expr) = App name (map letElimExpr expr)
 
 
